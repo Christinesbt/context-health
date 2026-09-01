@@ -1,0 +1,22 @@
+{
+  "name": "@christinesbt/context-health-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "esbuild scripts/server.mjs --bundle --minify --platform=node --format=esm --target=node20 --outfile=dist/server.mjs",
+    "scan": "node scripts/scan-cli.mjs",
+    "smoke": "node scripts/smoke.mjs",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

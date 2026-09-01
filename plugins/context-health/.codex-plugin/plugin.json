@@ -1,0 +1,33 @@
+{
+  "name": "context-health",
+  "version": "0.1.0+codex.20260901103018",
+  "description": "Check whether Codex project tasks still have trustworthy, focused context.",
+  "author": {
+    "name": "Christinesbt"
+  },
+  "repository": "https://github.com/Christinesbt/context-health",
+  "keywords": [
+    "codex",
+    "context",
+    "project-health",
+    "task-drift"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Context Health",
+    "shortDescription": "Detect drift and overloaded project tasks.",
+    "longDescription": "Scans all Codex tasks in a project for drift, repeated failures, stale assumptions, and excessive context load, then shows an explainable refreshable dashboard.",
+    "developerName": "Christinesbt",
+    "category": "Productivity",
+    "capabilities": [
+      "Project-wide task health scanning",
+      "Explainable drift signals",
+      "Refreshable inline dashboard"
+    ],
+    "defaultPrompt": [
+      "\u68c0\u67e5\u8fd9\u4e2a\u9879\u76ee\u6240\u6709\u4efb\u52a1\u7684\u4e0a\u4e0b\u6587\u5065\u5eb7\u5e76\u663e\u793a\u9762\u677f\u3002",
+      "\u54ea\u4e9b\u4efb\u52a1\u5df2\u7ecf\u504f\u79bb\u8ba1\u5212\u6216\u9002\u5408\u5f00\u65b0\u4efb\u52a1\u4ea4\u63a5\uff1f"
+    ]
+  },
+  "mcpServers": "./.mcp.json"
+}

@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "projects": [
+    {
+      "root": "E:\\projects\\example",
+      "projectId": "optional-codex-project-id",
+      "sessionPaths": [
+        "E:\\Codex\\worktrees\\example"
+      ],
+      "authority": [
+        "PRD.md",
+        ".knowledge/base/strategy.md",
+        ".knowledge/plan.md",
+        ".knowledge/progress.md"
+      ]
+    }
+  ]
+}
