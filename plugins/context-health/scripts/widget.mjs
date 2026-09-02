@@ -27,7 +27,7 @@ export const dashboardHtml = String.raw`<!doctype html>
       font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
     }
     button { font: inherit; }
-    .shell { display: grid; gap: 10px; }
+    .shell { display: grid; gap: 10px; min-width: 0; max-width: 100%; }
     .top {
       display: flex;
       align-items: flex-start;
@@ -64,7 +64,7 @@ export const dashboardHtml = String.raw`<!doctype html>
     .notice { padding: 9px 10px; color: var(--muted); }
     .notice strong { color: var(--text); }
     .tasks { display: grid; gap: 7px; max-height: 560px; overflow: auto; padding-right: 2px; }
-    .task { padding: 10px; }
+    .task { padding: 10px; min-width: 0; }
     .task-head { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; }
     .task-title { font-weight: 650; overflow-wrap: anywhere; }
     .badge {
@@ -78,7 +78,7 @@ export const dashboardHtml = String.raw`<!doctype html>
     .badge.healthy { background: var(--healthy); }
     .badge.watch { background: var(--watch); }
     .badge.risk { background: var(--risk); }
-    .preview, .meta, .recommendation { margin-top: 5px; color: var(--muted); }
+    .preview, .meta, .recommendation { margin-top: 5px; color: var(--muted); overflow-wrap: anywhere; }
     .meta { font-size: 11px; }
     .signals { margin: 7px 0 0; padding-left: 17px; }
     .signals li + li { margin-top: 3px; }
@@ -227,8 +227,11 @@ export const dashboardHtml = String.raw`<!doctype html>
           String(metrics.turnsLoaded || 0) + " 轮",
           String(metrics.compactions || 0) + " 次压缩",
           String((metrics.failedCommands || 0) + (metrics.failedTools || 0)) + " 个失败",
-        ].join(" · ");
-        card.append(element("div", "meta", meta));
+        ];
+        if (metrics.externalNetworkFailures) {
+          meta.push(String(metrics.externalNetworkFailures) + " 个外部网络故障已忽略");
+        }
+        card.append(element("div", "meta", meta.join(" · ")));
 
         if ((task.signals || []).length) {
           const list = element("ul", "signals");

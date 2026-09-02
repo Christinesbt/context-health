@@ -1,6 +1,8 @@
 const CORRECTION_PATTERN = /不要|别再|只需要|只做|先不要|先只|停止|停下|按(?:原|当前)?计划|保持范围|回到(?:目标|计划)|don't|do not|stop adding|only asked|stick to (?:the )?plan|stay focused|out of scope/iu;
 const DRIFT_PATTERN = /你.{0,12}(?:偏离|跑偏)|偏离(?:任务|目标|计划)|跑偏|不按计划|不要.{0,16}(?:额外功能|发散|扩展范围)|过度设计|擅自(?:增加|修改)|整体而不是局部|scope creep|off[- ]track|unplanned feature|overengineer/iu;
 const EXPANSION_PATTERN = /顺便|另外(?:还|也)|额外(?:增加|实现|补充)|同时(?:还|也)(?:增加|实现|补充)|while (?:i|we)(?:'m|'re| am| are) here|also (?:added|implemented)|in addition/iu;
+const NETWORK_ERROR_PATTERN = /\b(?:EAI_AGAIN|ENOTFOUND|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|UND_ERR_CONNECT_TIMEOUT|UND_ERR_SOCKET)\b|fetch failed|network (?:error|request failed)|could not resolve host|temporary failure in name resolution|failed to connect to .+ port|connection (?:reset|refused|timed out|closed before message completed)|socket hang up|remote end hung up unexpectedly|unexpected disconnect while reading sideband packet|RPC failed; curl (?:5|6|7|18|28|35|52|55|56|92)|网络(?:错误|连接失败)|连接(?:超时|被重置|被拒绝)|无法解析(?:主机|域名)|远程主机强迫关闭/iu;
+const LOCAL_ENDPOINT_PATTERN = /(?:localhost|127(?:\.\d{1,3}){3}|\[?::1\]?)(?::\d+)?/iu;
 
 const LEVEL_RANK = { healthy: 0, watch: 1, risk: 2 };
 
@@ -29,6 +31,28 @@ function formatSize(characters) {
   return `${Math.round(characters / 1_000)}k 字符`;
 }
 
+function networkEvidence(value) {
+  if (typeof value === "string") return value;
+  if (!value || typeof value !== "object") return "";
+  if (value.type === "commandExecution") return value.aggregatedOutput || "";
+  if (value.type === "mcpToolCall") {
+    return [value.error?.message, JSON.stringify(value.result?.content || [])]
+      .filter(Boolean)
+      .join("\n");
+  }
+  if (value.type === "dynamicToolCall") {
+    return (value.contentItems || []).map((item) => item.text || "").join("\n");
+  }
+  return [value.error?.message, value.error?.additionalDetails].filter(Boolean).join("\n");
+}
+
+export function isExternalNetworkFailure(value) {
+  const evidence = networkEvidence(value).slice(0, 8_000);
+  return Boolean(
+    evidence && !LOCAL_ENDPOINT_PATTERN.test(evidence) && NETWORK_ERROR_PATTERN.test(evidence),
+  );
+}
+
 export function analyzeThread({ thread, turns = [], hasMore = false, historyError = null, currentGit = null }) {
   const orderedTurns = [...turns].sort(
     (left, right) => (left.startedAt || 0) - (right.startedAt || 0),
@@ -42,6 +66,7 @@ export function analyzeThread({ thread, turns = [], hasMore = false, historyErro
   let failedCommands = 0;
   let failedTools = 0;
   let failedTurns = 0;
+  let externalNetworkFailures = 0;
   let corrections = 0;
   let driftCorrections = 0;
   let expansionCues = 0;
@@ -50,7 +75,10 @@ export function analyzeThread({ thread, turns = [], hasMore = false, historyErro
   let assistantSeen = hasMore;
 
   for (const turn of orderedTurns) {
-    if (turn.status === "failed") failedTurns += 1;
+    if (turn.status === "failed") {
+      if (isExternalNetworkFailure(turn)) externalNetworkFailures += 1;
+      else failedTurns += 1;
+    }
   }
 
   for (const item of items) {
@@ -80,17 +108,24 @@ export function analyzeThread({ thread, turns = [], hasMore = false, historyErro
       const key = normalizedCommand(item.command);
       const state = commandStates.get(key) || { currentFailureStreak: 0 };
       if (failed) {
-        failedCommands += 1;
-        if (key) {
-          state.currentFailureStreak += 1;
-          commandStates.set(key, state);
+        if (isExternalNetworkFailure(item)) {
+          externalNetworkFailures += 1;
+        } else {
+          failedCommands += 1;
+          if (key) {
+            state.currentFailureStreak += 1;
+            commandStates.set(key, state);
+          }
         }
       } else if (key && item.status === "completed" && (item.exitCode === null || item.exitCode === 0)) {
         state.currentFailureStreak = 0;
         commandStates.set(key, state);
       }
     } else if (item.type === "mcpToolCall" || item.type === "dynamicToolCall") {
-      if (item.status === "failed" || item.success === false) failedTools += 1;
+      if (item.status === "failed" || item.success === false) {
+        if (isExternalNetworkFailure(item)) externalNetworkFailures += 1;
+        else failedTools += 1;
+      }
     }
   }
 
@@ -266,6 +301,7 @@ export function analyzeThread({ thread, turns = [], hasMore = false, historyErro
       failedCommands,
       failedTools,
       failedTurns,
+      externalNetworkFailures,
       corrections,
       driftCorrections,
       expansionCues,

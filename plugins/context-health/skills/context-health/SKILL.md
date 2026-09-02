@@ -27,6 +27,7 @@ Use this skill when the user asks whether a project task or all tasks in a proje
 - Focus on drift, unplanned feature expansion, local fixes that conflict with the whole design, repeated mistakes, stale project assumptions, and context that is too heavy to carry safely.
 - Do not classify a task as risky from token/length/compaction signals alone.
 - A single user correction is normally a `watch` signal. Repeated correction plus continued expansion, plan churn, or repeated failure can become `risk`.
+- Ignore recognizable external transport failures such as DNS resolution, connection reset, and external connection timeout. Record them separately; do not let them raise the health score. A failed localhost connection is still project-local evidence and is not ignored.
 - Remind only. Do not automatically fork, create a replacement task, send a handoff, interrupt active work, or compact a task.
 - Do not edit the inspected project while checking health.
 - Do not create health configuration or state inside the inspected project. The default Windows data root is `E:\CodexData\context-health`.

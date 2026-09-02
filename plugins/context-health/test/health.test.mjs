@@ -147,6 +147,96 @@ test("a later successful command clears repeated-failure escalation", () => {
   assert.ok(!result.signals.some((item) => item.code === "repeated_failed_command"));
 });
 
+test("external network failures do not raise failure or risk signals", () => {
+  const result = analyzeThread({
+    thread: thread(),
+    turns: [
+      turn("turn-1", [
+        { type: "agentMessage", id: "agent-1", text: "我会继续实现。" },
+        {
+          type: "userMessage",
+          id: "user-1",
+          content: [{ type: "text", text: "你偏离计划了，不要扩展范围。" }],
+        },
+        {
+          type: "userMessage",
+          id: "user-2",
+          content: [{ type: "text", text: "还是不按计划，请回到目标。" }],
+        },
+        {
+          type: "commandExecution",
+          id: "network-1",
+          command: "git fetch origin",
+          status: "failed",
+          exitCode: 1,
+          aggregatedOutput: "fatal: unable to access repository: Could not resolve host: github.com",
+        },
+        {
+          type: "commandExecution",
+          id: "network-2",
+          command: "git fetch origin",
+          status: "failed",
+          exitCode: 1,
+          aggregatedOutput: "getaddrinfo ENOTFOUND github.com",
+        },
+      ]),
+    ],
+  });
+
+  assert.equal(result.level, "watch");
+  assert.equal(result.metrics.failedCommands, 0);
+  assert.equal(result.metrics.externalNetworkFailures, 2);
+  assert.ok(!result.signals.some((item) => item.code === "repeated_failed_command"));
+});
+
+test("localhost connection failures remain project failures", () => {
+  const result = analyzeThread({
+    thread: thread(),
+    turns: [
+      turn("turn-1", [
+        ...["local-1", "local-2"].map((id) => ({
+          type: "commandExecution",
+          id,
+          command: "npm run check-local",
+          status: "failed",
+          exitCode: 1,
+          aggregatedOutput: "connect ECONNREFUSED 127.0.0.1:3000",
+        })),
+      ]),
+    ],
+  });
+
+  assert.equal(result.metrics.failedCommands, 2);
+  assert.equal(result.metrics.externalNetworkFailures, 0);
+  assert.ok(result.signals.some((item) => item.code === "repeated_failed_command"));
+});
+
+test("network-caused tool and turn failures are ignored", () => {
+  const result = analyzeThread({
+    thread: thread(),
+    turns: [
+      {
+        id: "turn-1",
+        status: "failed",
+        error: { message: "network error: connection reset by peer" },
+        items: [
+          {
+            type: "mcpToolCall",
+            id: "tool-1",
+            status: "failed",
+            error: { message: "fetch failed: ETIMEDOUT api.example.com" },
+          },
+        ],
+      },
+    ],
+  });
+
+  assert.equal(result.level, "healthy");
+  assert.equal(result.metrics.failedTools, 0);
+  assert.equal(result.metrics.failedTurns, 0);
+  assert.equal(result.metrics.externalNetworkFailures, 2);
+});
+
 test("unreadable history is visible as watch", () => {
   const result = analyzeThread({ thread: thread(), historyError: "history did not load" });
 

@@ -1,6 +1,6 @@
 {
   "name": "context-health",
-  "version": "0.1.0+codex.20260901103018",
+  "version": "0.1.0+codex.20260902012049",
   "description": "Check whether Codex project tasks still have trustworthy, focused context.",
   "author": {
     "name": "Christinesbt"
