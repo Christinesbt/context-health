@@ -3,6 +3,7 @@ const DRIFT_PATTERN = /你.{0,12}(?:偏离|跑偏)|偏离(?:任务|目标|计划
 const EXPANSION_PATTERN = /顺便|另外(?:还|也)|额外(?:增加|实现|补充)|同时(?:还|也)(?:增加|实现|补充)|while (?:i|we)(?:'m|'re| am| are) here|also (?:added|implemented)|in addition/iu;
 const NETWORK_ERROR_PATTERN = /\b(?:EAI_AGAIN|ENOTFOUND|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|UND_ERR_CONNECT_TIMEOUT|UND_ERR_SOCKET)\b|fetch failed|network (?:error|request failed)|could not resolve host|temporary failure in name resolution|failed to connect to .+ port|connection (?:reset|refused|timed out|closed before message completed)|socket hang up|remote end hung up unexpectedly|unexpected disconnect while reading sideband packet|RPC failed; curl (?:5|6|7|18|28|35|52|55|56|92)|网络(?:错误|连接失败)|连接(?:超时|被重置|被拒绝)|无法解析(?:主机|域名)|远程主机强迫关闭/iu;
 const LOCAL_ENDPOINT_PATTERN = /(?:localhost|127(?:\.\d{1,3}){3}|\[?::1\]?)(?::\d+)?/iu;
+const SEARCH_COMMAND_PATTERN = /(?:^|[\s"'\\/])(?:rg|grep)(?:\.exe)?(?:\s|$)/iu;
 
 const LEVEL_RANK = { healthy: 0, watch: 1, risk: 2 };
 
@@ -31,10 +32,14 @@ function formatSize(characters) {
   return `${Math.round(characters / 1_000)}k 字符`;
 }
 
+function commandOutput(value) {
+  return value.aggregatedOutput || value.output?.text || "";
+}
+
 function networkEvidence(value) {
   if (typeof value === "string") return value;
   if (!value || typeof value !== "object") return "";
-  if (value.type === "commandExecution") return value.aggregatedOutput || "";
+  if (value.type === "commandExecution") return commandOutput(value);
   if (value.type === "mcpToolCall") {
     return [value.error?.message, JSON.stringify(value.result?.content || [])]
       .filter(Boolean)
@@ -44,6 +49,15 @@ function networkEvidence(value) {
     return (value.contentItems || []).map((item) => item.text || "").join("\n");
   }
   return [value.error?.message, value.error?.additionalDetails].filter(Boolean).join("\n");
+}
+
+function isExpectedSearchMiss(value) {
+  return Boolean(
+    value?.type === "commandExecution" &&
+      value.exitCode === 1 &&
+      SEARCH_COMMAND_PATTERN.test(value.command || "") &&
+      !commandOutput(value).trim(),
+  );
 }
 
 export function isExternalNetworkFailure(value) {
@@ -67,6 +81,7 @@ export function analyzeThread({ thread, turns = [], hasMore = false, historyErro
   let failedTools = 0;
   let failedTurns = 0;
   let externalNetworkFailures = 0;
+  let expectedSearchMisses = 0;
   let corrections = 0;
   let driftCorrections = 0;
   let expansionCues = 0;
@@ -110,6 +125,8 @@ export function analyzeThread({ thread, turns = [], hasMore = false, historyErro
       if (failed) {
         if (isExternalNetworkFailure(item)) {
           externalNetworkFailures += 1;
+        } else if (isExpectedSearchMiss(item)) {
+          expectedSearchMisses += 1;
         } else {
           failedCommands += 1;
           if (key) {
@@ -207,19 +224,6 @@ export function analyzeThread({ thread, turns = [], hasMore = false, historyErro
     );
   }
 
-  const totalFailures = failedCommands + failedTools + failedTurns;
-  if (totalFailures >= 3) {
-    score += 10;
-    signals.push(
-      signal(
-        "failure_accumulation",
-        "watch",
-        "失败信号正在累积",
-        `${failedCommands} 个命令失败、${failedTools} 个工具失败、${failedTurns} 个轮次失败。`,
-      ),
-    );
-  }
-
   if (planUpdates >= 4 && corrections > 0) {
     score += 10;
     signals.push(
@@ -301,7 +305,9 @@ export function analyzeThread({ thread, turns = [], hasMore = false, historyErro
       failedCommands,
       failedTools,
       failedTurns,
+      repeatedFailedCommand,
       externalNetworkFailures,
+      expectedSearchMisses,
       corrections,
       driftCorrections,
       expansionCues,

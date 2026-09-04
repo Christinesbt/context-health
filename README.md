@@ -1,6 +1,6 @@
 # Context Health
 
-Context Health 是一个本地 Codex 插件，用来检查同一项目下的任务是否仍然围绕原目标、计划和项目现状工作。
+Context Health 是一个本地 Codex 插件，用来选择并检查同一项目中的具体任务是否仍然围绕原目标、计划和项目现状工作。
 
 它优先发现这些问题：
 
@@ -15,13 +15,15 @@ Context Health 是一个本地 Codex 插件，用来检查同一项目下的任�
 
 ## MVP 能力
 
-- 综合 Codex 项目 ID、工作目录和 Git 远端身份，默认扫描该项目最近的 100 个非归档主任务（包括 Codex worktree 任务）；达到上限时会明确显示结果不完整。
+- 打开面板时只读取有界的任务元数据，不读取任务历史，也不计算健康结果。
+- 用户勾选具体任务后，才读取这些任务的有限历史并执行检查；空选择不会回退成全项目扫描。
+- 每个项目只保存已选任务 ID 和可选的权威文档配置，新任务默认不选中。
 - 返回健康、关注、风险三级结果，以及每项结果的可解释证据。
-- 在对话中显示可刷新的内联卡片。
+- 在对话中显示可手动刷新的紧凑内联卡片。
 - 只提醒用户是否应准备新任务交接，不自动创建、分叉或发送消息到其他任务。
-- 只持久化摘要、计数和有限长度的标题/预览，不复制完整会话或命令输出。
+- 插件不持久化健康结果、任务历史或命令输出。
 
-当前版本没有常驻后台进程。需要主动检查时，在项目任务中说“检查这个项目所有任务的上下文健康并显示面板”，或点击卡片里的“刷新项目”。
+当前版本没有常驻后台进程。需要检查时，在项目任务中说“打开 Context Health 面板”，勾选任务后点击“保存并检查”或“刷新所选”。
 
 ## 数据位置
 
@@ -36,12 +38,11 @@ E:\CodexData\context-health
 ```text
 E:\CodexData\context-health\
   config\projects.json
-  state\<project-hash>.json
 ```
 
-可以用 `CONTEXT_HEALTH_HOME` 覆盖位置。真实项目配置和扫描结果不在本仓库，也不会写入被检查项目的 Git 仓库。
+可以用 `CONTEXT_HEALTH_HOME` 覆盖位置。配置不在插件仓库，也不会写入被检查项目的 Git 仓库。
 
-第一次扫描会创建一个空的 `config\projects.json`。可按下面格式指定项目 ID、额外会话目录和权威文档顺序：
+第一次保存任务选择时会创建 `config\projects.json`；仅打开面板不会创建文件。任务选择通常由面板维护，也可按下面格式指定项目 ID、已选任务、额外会话目录和权威文档顺序：
 
 ```json
 {
@@ -51,6 +52,7 @@ E:\CodexData\context-health\
       "root": "E:\\projects\\example",
       "projectId": "optional-codex-project-id",
       "sessionPaths": ["E:\\Codex\\worktrees\\example"],
+      "selectedThreadIds": ["optional-codex-task-id"],
       "authority": [
         "PRD.md",
         ".knowledge/base/strategy.md",
@@ -62,9 +64,9 @@ E:\CodexData\context-health\
 }
 ```
 
-`authority` 从高到低排列。它只声明语义复核时应读取什么，不会把文档内容复制到状态文件。
+`authority` 从高到低排列。它只声明语义复核时应读取什么；插件不会复制这些文档内容。
 
-状态文件采用同目录临时文件替换，避免刷新中断留下半份 JSON。在 Windows 上，目录和文件继承 `E:\CodexData` 的 ACL；插件不会擅自修改系统权限。如果这块磁盘由多个系统用户共享，应由你限制 `E:\CodexData\context-health` 的访问权限。
+健康结果只返回给当前面板，不写入 `state` 文件。Codex 自身仍可能把工具调用及其结果保留在当前任务历史中；插件无法把这部分变成绝对的“零磁盘写入”。在 Windows 上，配置目录继承 `E:\CodexData` 的 ACL；如果这块磁盘由多个系统用户共享，应由你限制该目录的访问权限。
 
 ## 运行前提
 
@@ -84,10 +86,10 @@ npm run build
 npm run smoke -- --project E:\path\to\project
 ```
 
-直接验证扫描器：
+直接验证扫描器（不传 `--thread-id` 时使用已保存选择，可重复传入该参数）：
 
 ```powershell
-npm run scan -- --project E:\path\to\project
+npm run scan -- --project E:\path\to\project --thread-id <task-id>
 ```
 
 ## 安装
@@ -103,9 +105,9 @@ codex plugin add context-health@personal
 
 - 正在生成中的当前轮次可能还没有完整写入历史。
 - 启发式扫描不会单独决定换任务；风险提醒需要语义复核确认。
-- 默认最多分析最近 100 个匹配任务；项目或任务分页达到安全上限时，面板会标记结果不完整。
+- 面板默认最多展示最近 100 个匹配任务；只有已选任务会读取历史和分析。
 - 目前不主动后台轮询，也不会自动生成交接摘要或开启新任务。
-- 默认只检查非归档主任务，避免把子代理和历史归档混入结果。
+- 候选列表只包含非归档主任务，避免把子代理和历史归档混入结果。
 - 已有 Codex `projectId` 的任务只按该 ID 归属；只有旧的未分配任务才会回退到精确工作目录或脱敏后的 Git 远端身份。
 
 ## 设计参考

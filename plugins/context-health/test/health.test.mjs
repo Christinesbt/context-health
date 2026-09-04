@@ -177,7 +177,7 @@ test("external network failures do not raise failure or risk signals", () => {
           command: "git fetch origin",
           status: "failed",
           exitCode: 1,
-          aggregatedOutput: "getaddrinfo ENOTFOUND github.com",
+          output: { text: "getaddrinfo ENOTFOUND github.com" },
         },
       ]),
     ],
@@ -187,6 +187,51 @@ test("external network failures do not raise failure or risk signals", () => {
   assert.equal(result.metrics.failedCommands, 0);
   assert.equal(result.metrics.externalNetworkFailures, 2);
   assert.ok(!result.signals.some((item) => item.code === "repeated_failed_command"));
+});
+
+test("search commands with no matches are expected results", () => {
+  const result = analyzeThread({
+    thread: thread(),
+    turns: [
+      turn("turn-1", [
+        {
+          type: "commandExecution",
+          id: "search-1",
+          command: "rg -n missing-pattern README.md",
+          status: "failed",
+          exitCode: 1,
+          output: { text: "" },
+        },
+      ]),
+    ],
+  });
+
+  assert.equal(result.level, "healthy");
+  assert.equal(result.metrics.failedCommands, 0);
+  assert.equal(result.metrics.expectedSearchMisses, 1);
+});
+
+test("unrelated one-off command failures do not make context unhealthy", () => {
+  const result = analyzeThread({
+    thread: thread(),
+    turns: [
+      turn(
+        "turn-1",
+        Array.from({ length: 4 }, (_, index) => ({
+          type: "commandExecution",
+          id: `failure-${index}`,
+          command: `probe-${index}`,
+          status: "failed",
+          exitCode: 1,
+          output: { text: `probe ${index} failed` },
+        })),
+      ),
+    ],
+  });
+
+  assert.equal(result.level, "healthy");
+  assert.equal(result.metrics.failedCommands, 4);
+  assert.ok(!result.signals.some((item) => item.code === "failure_accumulation"));
 });
 
 test("localhost connection failures remain project failures", () => {

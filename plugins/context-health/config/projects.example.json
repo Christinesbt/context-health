@@ -7,6 +7,9 @@
       "sessionPaths": [
         "E:\\Codex\\worktrees\\example"
       ],
+      "selectedThreadIds": [
+        "optional-codex-task-id"
+      ],
       "authority": [
         "PRD.md",
         ".knowledge/base/strategy.md",

@@ -1,22 +1,16 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { readSnapshot, snapshotPathFor, writeSnapshot } from "../scripts/storage.mjs";
+import {
+  contextHealthHome,
+  loadProjectConfig,
+  saveProjectSelection,
+} from "../scripts/storage.mjs";
 
-function snapshot(projectPath, scannedAt) {
-  return {
-    version: 1,
-    scannedAt,
-    project: { path: projectPath },
-    summary: { level: "healthy", total: 0, healthy: 0, watch: 0, risk: 0 },
-    threads: [],
-  };
-}
-
-test("snapshot replacement stays readable and rejects an unsupported structure", async (context) => {
+test("only selected task IDs persist and no health state directory is created", async (context) => {
   const temporaryHome = await mkdtemp(path.join(os.tmpdir(), "context-health-test-"));
   const previousHome = process.env.CONTEXT_HEALTH_HOME;
   process.env.CONTEXT_HEALTH_HOME = temporaryHome;
@@ -27,13 +21,22 @@ test("snapshot replacement stays readable and rejects an unsupported structure",
   });
 
   const projectPath = path.join(temporaryHome, "project");
-  await writeSnapshot(snapshot(projectPath, "first"));
-  await writeSnapshot(snapshot(projectPath, "second"));
-  assert.equal((await readSnapshot(projectPath)).scannedAt, "second");
+  assert.equal(await loadProjectConfig(projectPath), null);
+  await assert.rejects(access(path.join(contextHealthHome(), "config")), { code: "ENOENT" });
 
-  await writeFile(snapshotPathFor(projectPath), '{"version":2}\n', "utf8");
-  await assert.rejects(
-    readSnapshot(projectPath),
-    /snapshot has an unsupported structure/u,
+  await saveProjectSelection({
+    projectPath,
+    projectId: "project-1",
+    selectedThreadIds: ["thread-2", "thread-1", "thread-2", ""],
+  });
+
+  const project = await loadProjectConfig(projectPath);
+  assert.equal(project.projectId, "project-1");
+  assert.deepEqual(project.selectedThreadIds, ["thread-2", "thread-1"]);
+
+  const config = JSON.parse(
+    await readFile(path.join(contextHealthHome(), "config", "projects.json"), "utf8"),
   );
+  assert.deepEqual(config.projects[0].selectedThreadIds, ["thread-2", "thread-1"]);
+  await assert.rejects(access(path.join(contextHealthHome(), "state")), { code: "ENOENT" });
 });

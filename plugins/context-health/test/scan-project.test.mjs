@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   normalizeGitOrigin,
   sanitizeGitOrigin,
+  selectThreadsById,
   threadBelongsToProject,
 } from "../scripts/scan-project.mjs";
 
@@ -50,4 +51,21 @@ test("scp-style SSH and HTTPS origins normalize to the same repository", () => {
     normalizeGitOrigin("git@github.com:example/alpha.git"),
     normalizeGitOrigin("https://github.com/example/alpha.git"),
   );
+});
+
+test("only explicitly selected tasks are returned", () => {
+  const threads = [{ id: "thread-1" }, { id: "thread-2" }, { id: "thread-3" }];
+  const selection = selectThreadsById(threads, ["thread-2", "missing", "thread-2"]);
+
+  assert.deepEqual(selection.selectedThreadIds, ["thread-2", "missing"]);
+  assert.deepEqual(selection.threads, [{ id: "thread-2" }]);
+  assert.deepEqual(selection.missingThreadIds, ["missing"]);
+});
+
+test("an empty selection never falls back to all project tasks", () => {
+  const threads = [{ id: "thread-1" }, { id: "thread-2" }];
+  const selection = selectThreadsById(threads, []);
+
+  assert.deepEqual(selection.threads, []);
+  assert.deepEqual(selection.selectedThreadIds, []);
 });

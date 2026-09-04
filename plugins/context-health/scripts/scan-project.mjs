@@ -9,8 +9,7 @@ import {
   contextHealthHome,
   loadProjectConfig,
   normalizeProjectPath,
-  snapshotPathFor,
-  writeSnapshot,
+  saveProjectSelection,
 } from "./storage.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -257,11 +256,37 @@ function errorSummary(error) {
     .slice(0, 180);
 }
 
-export async function scanProjectContextHealth({
+function threadOption(thread) {
+  return {
+    id: thread.id,
+    name: thread.name || thread.preview?.slice(0, 80) || "未命名任务",
+    status: thread.status?.type || "unknown",
+    updatedAt: thread.updatedAt,
+  };
+}
+
+export function selectThreadsById(threads, selectedThreadIds, limit = 100) {
+  const requestedThreadIds = [
+    ...new Set(
+      (selectedThreadIds || []).filter(
+        (threadId) => typeof threadId === "string" && threadId.trim(),
+      ),
+    ),
+  ];
+  const boundedThreadIds = requestedThreadIds.slice(0, Math.max(1, limit));
+  const byId = new Map(threads.map((thread) => [thread.id, thread]));
+  return {
+    selectedThreadIds: boundedThreadIds,
+    threads: boundedThreadIds.map((threadId) => byId.get(threadId)).filter(Boolean),
+    missingThreadIds: boundedThreadIds.filter((threadId) => !byId.has(threadId)),
+    truncated: requestedThreadIds.length > boundedThreadIds.length,
+  };
+}
+
+async function resolveProjectContext(client, {
   projectPath,
   projectId = null,
   maxThreads = 100,
-  turnLimit = 30,
 } = {}) {
   if (typeof projectPath !== "string" || !projectPath.trim()) {
     throw new Error("projectPath is required.");
@@ -272,59 +297,145 @@ export async function scanProjectContextHealth({
   if (!projectStat.isDirectory()) throw new Error(`projectPath is not a directory: ${requestedPath}`);
 
   const boundedMaxThreads = Math.max(1, Math.min(100, Number(maxThreads) || 100));
-  const boundedTurnLimit = Math.max(1, Math.min(100, Number(turnLimit) || 30));
   let config = await loadProjectConfig(requestedPath);
+  const projectDiscovery = await listProjects(client);
+  const projects = projectDiscovery.projects;
+  const configuredProjectId = projectId || config?.projectId;
+  const matchedById = matchProjectById(projects, configuredProjectId);
+  if (configuredProjectId && !matchedById) {
+    const suffix = projectDiscovery.truncated ? "（项目列表读取不完整）" : "";
+    throw new Error(`Codex projectId does not exist: ${configuredProjectId}${suffix}`);
+  }
+  const matchedByExactPath = matchProjectByExactPath(projects, requestedPath);
+  const matchedByGitOrigin =
+    matchedById || matchedByExactPath
+      ? null
+      : await matchProjectByGitOrigin(projects, requestedPath);
+  const matchedByContainingPath =
+    matchedById || matchedByExactPath || matchedByGitOrigin
+      ? null
+      : matchProjectByContainingPath(projects, requestedPath);
+  const matchedProject =
+    matchedById || matchedByExactPath || matchedByGitOrigin || matchedByContainingPath;
+  const projectMatch = matchedById
+    ? "projectId"
+    : matchedByExactPath
+      ? "exact-path"
+      : matchedByGitOrigin
+        ? "git-origin"
+        : matchedByContainingPath
+          ? "containing-path"
+          : "unmatched";
+  const canonicalPath = canonicalProjectRoot(matchedProject, requestedPath);
+  config = (await loadProjectConfig(canonicalPath)) || config;
+  const resolvedProjectId = projectId || config?.projectId || matchedProject?.id || null;
+  const sessionPaths = [...new Set([canonicalPath, ...(config?.sessionPaths || [])])];
+  const gitOrigin = await gitOriginAt(canonicalPath);
+  const discovery = await listCandidateThreads(client, resolvedProjectId);
+  const matchingThreads = deduplicateThreads(discovery.threads)
+    .filter((thread) =>
+      threadBelongsToProject(thread, {
+        projectId: resolvedProjectId,
+        sessionPaths,
+        gitOrigin,
+      }),
+    )
+    .sort((left, right) => right.updatedAt - left.updatedAt);
+  const configuredSelection = config?.selectedThreadIds || [];
+  const firstCandidates = matchingThreads.slice(0, boundedMaxThreads);
+  const firstCandidateIds = new Set(firstCandidates.map((thread) => thread.id));
+  const configuredIds = new Set(configuredSelection);
+  const selectedOutsideLimit = matchingThreads.filter(
+    (thread) => configuredIds.has(thread.id) && !firstCandidateIds.has(thread.id),
+  );
+
+  return {
+    requestedPath,
+    canonicalPath,
+    config,
+    resolvedProjectId,
+    sessionPaths,
+    matchedProject,
+    projectMatch,
+    projectDiscovery,
+    discovery,
+    matchingThreads,
+    candidateThreads: [...firstCandidates, ...selectedOutsideLimit],
+    candidateLimit: boundedMaxThreads,
+  };
+}
+
+function dashboardPayload(context, selectedThreadIds, result = null) {
+  const selection = selectThreadsById(context.matchingThreads, selectedThreadIds);
+  return {
+    version: 2,
+    project: {
+      path: context.canonicalPath,
+      requestedPath: context.requestedPath,
+      projectId: context.resolvedProjectId,
+      name: context.matchedProject?.name || path.basename(context.canonicalPath),
+      match: context.projectMatch,
+    },
+    candidates: context.candidateThreads.map(threadOption),
+    selection: {
+      selectedThreadIds: selection.selectedThreadIds,
+      missingThreadIds: selection.missingThreadIds,
+      truncated: selection.truncated,
+    },
+    discovery: {
+      candidateLimit: context.candidateLimit,
+      matchingThreads: context.matchingThreads.length,
+      candidatesShown: context.candidateThreads.length,
+      projectDiscoveryTruncated: context.projectDiscovery.truncated,
+      threadDiscoveryTruncated: context.discovery.truncated,
+      candidateListTruncated: context.matchingThreads.length > context.candidateLimit,
+    },
+    result,
+    persistence: {
+      selection: "local-config",
+      healthResults: "memory-only",
+      dataRoot: contextHealthHome(),
+    },
+  };
+}
+
+export async function loadProjectContextHealthDashboard(input = {}) {
   const client = await AppServerClient.connect();
-
   try {
-    const projectDiscovery = await listProjects(client);
-    const projects = projectDiscovery.projects;
-    const configuredProjectId = projectId || config?.projectId;
-    const matchedById = matchProjectById(projects, configuredProjectId);
-    if (configuredProjectId && !matchedById) {
-      const suffix = projectDiscovery.truncated ? "（项目列表读取不完整）" : "";
-      throw new Error(`Codex projectId does not exist: ${configuredProjectId}${suffix}`);
+    const context = await resolveProjectContext(client, input);
+    return dashboardPayload(context, context.config?.selectedThreadIds || []);
+  } finally {
+    client.close();
+  }
+}
+
+export async function scanProjectContextHealth({
+  projectPath,
+  projectId = null,
+  threadIds,
+  maxThreads = 100,
+  turnLimit = 30,
+} = {}) {
+  const boundedTurnLimit = Math.max(1, Math.min(100, Number(turnLimit) || 30));
+  const client = await AppServerClient.connect();
+  try {
+    const context = await resolveProjectContext(client, { projectPath, projectId, maxThreads });
+    const selectedThreadIds =
+      threadIds === undefined ? context.config?.selectedThreadIds || [] : threadIds;
+    if (threadIds !== undefined) {
+      await saveProjectSelection({
+        projectPath: context.canonicalPath,
+        projectId: context.resolvedProjectId,
+        selectedThreadIds,
+      });
     }
-    const matchedByExactPath = matchProjectByExactPath(projects, requestedPath);
-    const matchedByGitOrigin =
-      matchedById || matchedByExactPath
-        ? null
-        : await matchProjectByGitOrigin(projects, requestedPath);
-    const matchedByContainingPath =
-      matchedById || matchedByExactPath || matchedByGitOrigin
-        ? null
-        : matchProjectByContainingPath(projects, requestedPath);
-    const matchedProject =
-      matchedById || matchedByExactPath || matchedByGitOrigin || matchedByContainingPath;
-    const projectMatch = matchedById
-      ? "projectId"
-      : matchedByExactPath
-        ? "exact-path"
-        : matchedByGitOrigin
-          ? "git-origin"
-          : matchedByContainingPath
-            ? "containing-path"
-            : "unmatched";
-    const canonicalPath = canonicalProjectRoot(matchedProject, requestedPath);
-    config = (await loadProjectConfig(canonicalPath)) || config;
-    const resolvedProjectId = projectId || config?.projectId || matchedProject?.id || null;
-    const sessionPaths = [...new Set([canonicalPath, ...(config?.sessionPaths || [])])];
+    const selection = selectThreadsById(context.matchingThreads, selectedThreadIds);
+    if (!selection.threads.length) {
+      return dashboardPayload(context, selection.selectedThreadIds);
+    }
 
-    const git = await currentGitInfo(canonicalPath);
-    const discovery = await listCandidateThreads(client, resolvedProjectId);
-    const gitOrigin = normalizeGitOrigin(git?.originUrl);
-    const matchingThreads = deduplicateThreads(discovery.threads)
-      .filter((thread) =>
-        threadBelongsToProject(thread, {
-          projectId: resolvedProjectId,
-          sessionPaths,
-          gitOrigin,
-        }),
-      )
-      .sort((left, right) => right.updatedAt - left.updatedAt);
-    const selectedThreads = matchingThreads.slice(0, boundedMaxThreads);
-
-    const analyzedThreads = await mapWithConcurrency(selectedThreads, 4, async (thread) => {
+    const git = await currentGitInfo(context.canonicalPath);
+    const analyzedThreads = await mapWithConcurrency(selection.threads, 4, async (thread) => {
       try {
         const history = await client.request("thread/turns/list", {
           threadId: thread.id,
@@ -344,29 +455,33 @@ export async function scanProjectContextHealth({
     });
 
     const threads = sortByHealth(analyzedThreads);
-    const authority = await authorityStatus(canonicalPath, config?.authority || []);
+    const authority = await authorityStatus(
+      context.canonicalPath,
+      context.config?.authority || [],
+    );
     const scannedAt = new Date().toISOString();
-    const snapshot = {
+    const result = {
       version: 1,
       scannedAt,
       project: {
-        path: canonicalPath,
-        requestedPath,
-        projectId: resolvedProjectId,
-        name: matchedProject?.name || path.basename(canonicalPath),
-        match: projectMatch,
-        sessionPaths,
+        path: context.canonicalPath,
+        requestedPath: context.requestedPath,
+        projectId: context.resolvedProjectId,
+        name: context.matchedProject?.name || path.basename(context.canonicalPath),
+        match: context.projectMatch,
+        sessionPaths: context.sessionPaths,
         authority,
       },
       git,
       scope: {
-        threadLimit: boundedMaxThreads,
         turnLimit: boundedTurnLimit,
-        projectDiscoveryTruncated: projectDiscovery.truncated,
-        threadDiscoveryTruncated: discovery.truncated,
-        selectionTruncated: matchingThreads.length > boundedMaxThreads,
-        threadsTruncated: discovery.truncated || matchingThreads.length > boundedMaxThreads,
-        matchingThreads: matchingThreads.length,
+        selectedThreads: selection.threads.length,
+        missingSelectedThreads: selection.missingThreadIds.length,
+        selectionTruncated: selection.truncated,
+        projectDiscoveryTruncated: context.projectDiscovery.truncated,
+        threadDiscoveryTruncated: context.discovery.truncated,
+        threadsTruncated: context.discovery.truncated || selection.truncated,
+        matchingThreads: context.matchingThreads.length,
         sourceKinds: SOURCE_KINDS,
         archivedIncluded: false,
         subagentsIncluded: false,
@@ -379,14 +494,10 @@ export async function scanProjectContextHealth({
         compactionAloneIsRisk: false,
         automaticHandoff: false,
       },
-      storage: {
-        dataRoot: contextHealthHome(),
-        snapshotPath: snapshotPathFor(canonicalPath),
-      },
+      persistence: "memory-only",
     };
 
-    await writeSnapshot(snapshot);
-    return snapshot;
+    return dashboardPayload(context, selection.selectedThreadIds, result);
   } finally {
     client.close();
   }
